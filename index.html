@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Soufflerie numérique</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>Soufflerie <span>numérique</span></h1>
+      <div class="playback">
+        <button id="btn-pause" class="primary" title="Pause (Espace)">Pause</button>
+        <button id="btn-reset" title="Repartir d'un écoulement uniforme (R)">Réinitialiser</button>
+        <button id="btn-gust" title="Envoyer une rafale depuis l'entrée (G)">Rafale</button>
+      </div>
+      <dl class="readouts">
+        <div><dt>pas</dt><dd id="r-steps">0</dd></div>
+        <div><dt>temps conv. t*</dt><dd id="r-tstar">0</dd></div>
+        <div><dt>temps physique</dt><dd id="r-tphys">0</dd></div>
+        <div><dt>pas / image</dt><dd id="r-spf">0</dd></div>
+        <div><dt>MLUPS</dt><dd id="r-mlups">0</dd></div>
+        <div><dt>images/s</dt><dd id="r-fps">0</dd></div>
+      </dl>
+    </header>
+
+    <main class="stage" id="stage">
+      <canvas id="view"></canvas>
+
+      <div class="hud">
+        <div class="coef"><span class="k cx">Cx</span><span id="h-cd" class="v">—</span></div>
+        <div class="coef"><span class="k cz">Cz</span><span id="h-cl" class="v">—</span></div>
+        <div class="coef"><span class="k cy">Cy</span><span id="h-cs" class="v">—</span></div>
+        <div class="hud-sub" id="h-sub"></div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-title" id="legend-title"></div>
+        <canvas id="legend-bar"></canvas>
+        <div class="legend-scale"><span id="legend-min"></span><span id="legend-max"></span></div>
+      </div>
+
+      <div class="tool-switch" role="group" aria-label="Outil souris">
+        <button id="tool-camera" aria-pressed="true" title="Clic gauche : tourner · clic droit : déplacer · molette : zoom">Caméra</button>
+        <button id="tool-blow" aria-pressed="false" title="Glisser pour remuer l'air, maintenir pour souffler (ou Ctrl + glisser en mode caméra)">Perturber</button>
+      </div>
+
+      <div class="help" id="help">
+        <b>Souris</b> : gauche tourner · droit déplacer · molette zoom<br>
+        <b>Ctrl + glisser</b> ou outil <i>Perturber</i> : remuer l'air · maintenir immobile : souffler<br>
+        <b>Espace</b> pause · <b>R</b> réinitialiser · <b>G</b> rafale · <b>C</b> recadrer · glisser un fichier 3D ici pour l'importer
+      </div>
+
+      <div class="toast" id="toast" hidden></div>
+      <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busy-text">Préparation…</span></div>
+      <div class="drop" id="drop" hidden>Déposer le fichier 3D (STL, OBJ, GLB, glTF)</div>
+      <div class="fatal" id="fatal" hidden></div>
+    </main>
+
+    <aside class="panel">
+      <details open>
+        <summary>Mesures</summary>
+        <div class="measures">
+          <table>
+            <thead><tr><th></th><th>instant.</th><th>moyenne</th><th>écart-type</th></tr></thead>
+            <tbody>
+              <tr><th class="cx">Cx (traînée)</th><td id="m-cd">—</td><td id="m-cd-avg">—</td><td id="m-cd-std">—</td></tr>
+              <tr><th class="cz">Cz (portance)</th><td id="m-cl">—</td><td id="m-cl-avg">—</td><td id="m-cl-std">—</td></tr>
+              <tr><th class="cy">Cy (latéral)</th><td id="m-cs">—</td><td id="m-cs-avg">—</td><td></td></tr>
+            </tbody>
+          </table>
+          <dl class="kv">
+            <dt>Traînée</dt><dd id="m-drag">—</dd>
+            <dt>Portance</dt><dd id="m-lift">—</dd>
+            <dt>Finesse Cz/Cx</dt><dd id="m-ld">—</dd>
+            <dt>Strouhal</dt><dd id="m-st">—</dd>
+            <dt>SCx</dt><dd id="m-scx">—</dd>
+            <dt>Surface de réf.</dt><dd id="m-area">—</dd>
+          </dl>
+          <canvas id="chart" class="chart"></canvas>
+          <div class="row">
+            <label>Moyenne sur <select id="avg-window">
+              <option value="5">5 t*</option>
+              <option value="10" selected>10 t*</option>
+              <option value="25">25 t*</option>
+              <option value="50">50 t*</option>
+            </select></label>
+            <label>Surface <select id="ref-area">
+              <option value="frontal">frontale</option>
+              <option value="planform">alaire (dessus)</option>
+            </select></label>
+          </div>
+          <button id="btn-clear-stats" class="small">Effacer l'historique</button>
+        </div>
+      </details>
+
+      <details open>
+        <summary>Maquette</summary>
+        <label class="field">Modèle
+          <select id="preset"></select>
+        </label>
+        <div class="row">
+          <button id="btn-import" class="accent">Importer un fichier 3D…</button>
+          <input type="file" id="file" accept=".stl,.obj,.glb,.gltf" hidden>
+        </div>
+        <p class="note">STL, OBJ, glTF/GLB. Le modèle est mis à l'échelle automatiquement ; indiquez sa longueur réelle dans « Écoulement ».</p>
+        <label class="field">Axe vertical du fichier
+          <select id="up-axis">
+            <option value="z">Z vers le haut (STL, CAO)</option>
+            <option value="y">Y vers le haut (OBJ, glTF, Blender export)</option>
+          </select>
+        </label>
+        <label class="slider">Lacet (rotation verticale) <output id="o-yaw"></output>
+          <input type="range" id="yaw" min="-180" max="180" step="1" value="0">
+        </label>
+        <label class="slider">Incidence / tangage <output id="o-pitch"></output>
+          <input type="range" id="pitch" min="-45" max="45" step="0.5" value="0">
+        </label>
+        <label class="slider">Roulis <output id="o-roll"></output>
+          <input type="range" id="roll" min="-180" max="180" step="1" value="0">
+        </label>
+        <label class="field">Sol
+          <select id="ground">
+            <option value="none">Aucun (écoulement libre)</option>
+            <option value="fixed">Sol fixe</option>
+            <option value="moving">Tapis roulant (sol à la vitesse de l'air)</option>
+          </select>
+        </label>
+        <label class="slider" id="clearance-row">Garde au sol <output id="o-clearance"></output>
+          <input type="range" id="clearance" min="0" max="0.5" step="0.01" value="0">
+        </label>
+        <label class="check"><input type="checkbox" id="thicken"> Épaissir les surfaces (maillage ouvert ou parois très fines)</label>
+        <dl class="kv" id="model-info"></dl>
+      </details>
+
+      <details open>
+        <summary>Soufflerie</summary>
+        <label class="field">Résolution (nombre de cellules)
+          <select id="budget"></select>
+        </label>
+        <label class="field">Taille de la veine
+          <select id="margins">
+            <option value="compact">Compacte (rapide, plus de blocage)</option>
+            <option value="standard" selected>Standard</option>
+            <option value="large">Large (moins d'effets de parois)</option>
+          </select>
+        </label>
+        <dl class="kv" id="domain-info"></dl>
+      </details>
+
+      <details open>
+        <summary>Écoulement</summary>
+        <label class="field">Fluide
+          <select id="fluid">
+            <option value="air">Air (20 °C)</option>
+            <option value="water">Eau (20 °C)</option>
+          </select>
+        </label>
+        <div class="row two">
+          <label class="field">Vitesse (m/s)
+            <input type="number" id="speed" min="0.001" max="1000" step="any" value="30">
+          </label>
+          <label class="field">Longueur de l'objet (m)
+            <input type="number" id="length" min="0.0001" max="1000" step="any" value="1">
+          </label>
+        </div>
+        <p class="note" id="speed-note"></p>
+        <label class="slider">Turbulence de l'écoulement amont <output id="o-turb"></output>
+          <input type="range" id="turb" min="0" max="15" step="0.5" value="0">
+        </label>
+        <label class="slider">Amplitude des rafales <output id="o-gust"></output>
+          <input type="range" id="gust" min="0.1" max="0.8" step="0.05" value="0.35">
+        </label>
+        <details class="sub">
+          <summary>Réglages numériques</summary>
+          <label class="slider">Vitesse réseau u (Mach réseau) <output id="o-ulb"></output>
+            <input type="range" id="ulb" min="0.02" max="0.15" step="0.005" value="0.08">
+          </label>
+          <label class="slider">Constante de Smagorinsky Cs <output id="o-cs"></output>
+            <input type="range" id="smag" min="0.08" max="0.25" step="0.01" value="0.14">
+          </label>
+          <label class="slider">Pas par image (0 = auto) <output id="o-spf"></output>
+            <input type="range" id="spf" min="0" max="60" step="1" value="0">
+          </label>
+        </details>
+        <dl class="kv" id="flow-info"></dl>
+      </details>
+
+      <details open>
+        <summary>Perturbation à la souris</summary>
+        <label class="slider">Rayon <output id="o-prad"></output>
+          <input type="range" id="prad" min="1" max="30" step="0.5" value="6">
+        </label>
+        <label class="slider">Intensité <output id="o-pstr"></output>
+          <input type="range" id="pstr" min="0.1" max="5" step="0.1" value="1">
+        </label>
+        <p class="note">Outil « Perturber » (ou Ctrl en mode caméra) : glisser remue l'air dans le plan face à la caméra ; maintenir le clic sans bouger souffle dans la direction du regard.</p>
+      </details>
+
+      <details open>
+        <summary>Visualisation</summary>
+        <h3>Coupe</h3>
+        <label class="check"><input type="checkbox" id="slice-show" checked> Afficher le plan de coupe</label>
+        <label class="field">Grandeur
+          <select id="slice-field"></select>
+        </label>
+        <div class="row segmented" role="group" aria-label="Orientation de la coupe">
+          <button data-axis="0">Transversale (X)</button>
+          <button data-axis="1">Longitudinale (Y)</button>
+          <button data-axis="2">Horizontale (Z)</button>
+        </div>
+        <label class="slider">Position <output id="o-slice-pos"></output>
+          <input type="range" id="slice-pos" min="0" max="1" step="0.002" value="0.5">
+        </label>
+        <div class="row two">
+          <label class="field">Min <input type="number" id="slice-min" step="any"></label>
+          <label class="field">Max <input type="number" id="slice-max" step="any"></label>
+        </div>
+
+        <h3>Fumée</h3>
+        <label class="check"><input type="checkbox" id="smoke-show" checked> Afficher les filets de fumée</label>
+        <label class="field">Peigne d'injection
+          <select id="smoke-mode">
+            <option value="horizontal">Peigne horizontal</option>
+            <option value="vertical">Peigne vertical</option>
+            <option value="grid">Grille de buses</option>
+            <option value="cloud">Nuage (plan entier)</option>
+          </select>
+        </label>
+        <label class="slider">Hauteur du peigne <output id="o-smoke-z"></output>
+          <input type="range" id="smoke-z" min="0" max="1" step="0.005" value="0.5">
+        </label>
+        <label class="slider">Position latérale <output id="o-smoke-y"></output>
+          <input type="range" id="smoke-y" min="0" max="1" step="0.005" value="0.5">
+        </label>
+        <label class="slider">Largeur du peigne <output id="o-smoke-w"></output>
+          <input type="range" id="smoke-w" min="0.05" max="1" step="0.01" value="0.5">
+        </label>
+        <label class="slider">Buses <output id="o-smoke-n"></output>
+          <input type="range" id="smoke-n" min="2" max="64" step="1" value="24">
+        </label>
+        <label class="field">Nombre de particules
+          <select id="smoke-count">
+            <option value="32768">32 k</option>
+            <option value="65536">65 k</option>
+            <option value="131072" selected>131 k</option>
+            <option value="262144">262 k</option>
+            <option value="524288">524 k</option>
+          </select>
+        </label>
+        <label class="slider">Taille <output id="o-smoke-size"></output>
+          <input type="range" id="smoke-size" min="1" max="6" step="0.25" value="2">
+        </label>
+
+        <h3>Tourbillons (volume)</h3>
+        <label class="field">Rendu
+          <select id="vol-mode">
+            <option value="0">Aucun</option>
+            <option value="1">Isosurface du critère Q</option>
+            <option value="2">Brume de vorticité</option>
+          </select>
+        </label>
+        <label class="slider">Seuil <output id="o-vol-thr"></output>
+          <input type="range" id="vol-thr" min="0" max="1" step="0.005" value="0.35">
+        </label>
+
+        <h3>Surface</h3>
+        <label class="check"><input type="checkbox" id="surf-cp" checked> Colorer la maquette par la pression (Cp)</label>
+      </details>
+    </aside>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
